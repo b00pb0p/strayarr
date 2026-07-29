@@ -1,6 +1,6 @@
 # Strayarr
 
-**Find files your torrent client no longer claims — without touching them.**
+**Find files your qBittorrent client no longer claims — without touching them.**
 
 A single PowerShell script that compares what qBittorrent thinks it has against
 what is actually on disk, and reports the difference. It never deletes anything.
