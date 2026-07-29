@@ -128,7 +128,10 @@ function Get-HardlinkCount {
         try {
             $n = & stat -c '%h' "$Path" 2>$null
             if ($LASTEXITCODE -eq 0 -and $n -match '^\d+$') { return [int]$n }
-        } catch { }
+        } catch {
+            Write-Verbose "stat failed for '$Path': $($_.Exception.Message)"
+        }
+        # Unknown link count. The caller treats $null as "do not move".
         return $null
     }
     try {

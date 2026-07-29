@@ -7,13 +7,14 @@ on:
 
 jobs:
   # Runs on Windows so the script is parsed by the engine that will run it.
-  # This exists because every bug in this script's history was a parse error or
-  # an encoding problem that a single execution would have caught.
+  # Every bug in this script's history was a parse error or an encoding problem
+  # that a single execution would have caught.
   analyze:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
+      # --- hard failures: these catch real defects -----------------------
       - name: Parse check
         shell: pwsh
         run: |
@@ -29,14 +30,42 @@ jobs:
           # Windows PowerShell 5.1 reads .ps1 as Windows-1252 without a BOM, so a
           # UTF-8 em dash decodes to a smart quote and silently ends a string.
           $bytes = [System.IO.File]::ReadAllBytes("$PWD/Invoke-OrphanScan.ps1")
-          $bad = $bytes | Where-Object { $_ -gt 127 }
-          if ($bad) { Write-Error "Non-ASCII bytes found ($($bad.Count)). Keep this script ASCII-only."; exit 1 }
+          $bad = @($bytes | Where-Object { $_ -gt 127 })
+          if ($bad.Count) { Write-Error "Non-ASCII bytes found ($($bad.Count)). Keep this script ASCII-only."; exit 1 }
           Write-Host "ASCII only."
 
-      - name: PSScriptAnalyzer
+      # --- static analysis: errors fail, style is informational ----------
+      - name: Static analysis
         shell: pwsh
         run: |
           Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
-          $r = Invoke-ScriptAnalyzer -Path ./Invoke-OrphanScan.ps1 -Severity Error,Warning
-          if ($r) { $r | Format-Table -AutoSize; exit 1 }
-          Write-Host "No findings."
+          Import-Module PSScriptAnalyzer
+
+          # The excluded rules are deliberate choices, not oversights:
+          #   PSAvoidUsingWriteHost - console output IS this tool's interface
+          #   PSUseApprovedVerbs    - internal helpers, nothing is exported
+          #   PSAvoidUsingPlainTextForPassword / PSAvoidUsingUserNameAndPasswordParams
+          #                         - qBittorrent's API takes a plain string, so a
+          #                           SecureString would be converted straight back
+          $skip = @(
+            'PSAvoidUsingWriteHost',
+            'PSUseApprovedVerbs',
+            'PSAvoidUsingPlainTextForPassword',
+            'PSAvoidUsingUserNameAndPasswordParams'
+          )
+
+          $errors = Invoke-ScriptAnalyzer -Path ./Invoke-OrphanScan.ps1 -Severity Error -ExcludeRule $skip
+          if ($errors) {
+            Write-Host "Errors:" -ForegroundColor Red
+            $errors | Format-Table RuleName, Line, Message -AutoSize | Out-String | Write-Host
+            exit 1
+          }
+          Write-Host "No errors."
+
+          # Warnings are surfaced for the record but do not fail the build.
+          $warn = Invoke-ScriptAnalyzer -Path ./Invoke-OrphanScan.ps1 -Severity Warning -ExcludeRule $skip
+          if ($warn) {
+            Write-Host ""
+            Write-Host "Warnings (informational):" -ForegroundColor Yellow
+            $warn | Format-Table RuleName, Line, Message -AutoSize | Out-String | Write-Host
+          }
