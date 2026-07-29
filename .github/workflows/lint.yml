@@ -1,0 +1,42 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Runs on Windows so the script is parsed by the engine that will run it.
+  # This exists because every bug in this script's history was a parse error or
+  # an encoding problem that a single execution would have caught.
+  analyze:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse check
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/Invoke-OrphanScan.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          Write-Host "Parses cleanly."
+
+      - name: Reject non-ASCII
+        shell: pwsh
+        run: |
+          # Windows PowerShell 5.1 reads .ps1 as Windows-1252 without a BOM, so a
+          # UTF-8 em dash decodes to a smart quote and silently ends a string.
+          $bytes = [System.IO.File]::ReadAllBytes("$PWD/Invoke-OrphanScan.ps1")
+          $bad = $bytes | Where-Object { $_ -gt 127 }
+          if ($bad) { Write-Error "Non-ASCII bytes found ($($bad.Count)). Keep this script ASCII-only."; exit 1 }
+          Write-Host "ASCII only."
+
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $r = Invoke-ScriptAnalyzer -Path ./Invoke-OrphanScan.ps1 -Severity Error,Warning
+          if ($r) { $r | Format-Table -AutoSize; exit 1 }
+          Write-Host "No findings."
