@@ -34,6 +34,20 @@ jobs:
           if ($bad.Count) { Write-Error "Non-ASCII bytes found ($($bad.Count)). Keep this script ASCII-only."; exit 1 }
           Write-Host "ASCII only."
 
+      # --- behavior: the one property that must never regress -------------
+      # The pre-move re-verification only re-fetches torrents that could claim
+      # a candidate. This checks that shortcut against the full answer on a few
+      # hundred random clients. Run under BOTH engines, because the script
+      # supports both and they differ in exactly the path and string handling
+      # this depends on.
+      - name: Re-verification agrees with the full check (PowerShell 7)
+        shell: pwsh
+        run: ./tests/Test-Reverify.ps1
+
+      - name: Re-verification agrees with the full check (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tests/Test-Reverify.ps1
+
       # --- static analysis: errors fail, style is informational ----------
       - name: Static analysis
         shell: pwsh

@@ -83,6 +83,19 @@ function Normalize-Path {
     ($Path -replace '/', '\').TrimEnd('\')
 }
 
+# The directory holding a file, by plain string work on an already-normalised
+# path. Deliberately NOT Split-Path: that rewrites separators to the platform's
+# own, so its answer stops matching the backslash form everything else here
+# compares in. The first version of the narrowed re-verification used it, and
+# the equivalence test caught 242 candidates it would have wrongly cleared for
+# moving on a platform where the separators differ.
+function Get-ParentDir {
+    param([string]$Path)
+    $i = $Path.LastIndexOf('\')
+    if ($i -lt 0) { return $Path }
+    $Path.Substring(0, $i)
+}
+
 # Applied to every path qBittorrent reports, before comparison. Longest prefix
 # wins, so nested mappings behave predictably. Needed whenever the client sees
 # different paths from this machine -- a container, a mapped drive, a remote
@@ -158,8 +171,21 @@ function Connect-Qb {
 # Builds the expected set. Returns exact file paths and directory prefixes
 # separately: a disk file is expected if it matches a path, or if any of its
 # ancestor directories is a known root.
+#
+# -OnlyUnder narrows which torrents have their file list fetched, and exists
+# for the re-verification before a move. That pass must not trust the cache, so
+# it used to re-fetch every torrent: 1,739 requests, many minutes, to confirm
+# three files in one folder. But a torrent only ever claims files beneath its
+# own save or download directory, so one whose directories are not an ancestor
+# of any candidate cannot claim any candidate, and its file list cannot change
+# the answer. Those are skipped. content_path still comes from the fresh
+# torrent list for EVERY torrent, since that costs no extra request.
+#
+# The test is a plain prefix with no separator check, on purpose. That can only
+# over-include (E:\tv also matches E:\tv-4k), which costs a request, and never
+# under-include, which would cost a file.
 function Build-Expected {
-    param($Session, [hashtable]$Cache, [ref]$ApiCalls)
+    param($Session, [hashtable]$Cache, [ref]$ApiCalls, [string[]]$OnlyUnder)
 
     $paths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 
@@ -189,6 +215,18 @@ function Build-Expected {
         $rootDirs = @()
         if ($t.save_path)     { $rootDirs += (Convert-ClientPath $t.save_path) }
         if ($t.download_path) { $rootDirs += (Convert-ClientPath $t.download_path) }
+
+        if ($PSBoundParameters.ContainsKey('OnlyUnder')) {
+            $relevant = $false
+            foreach ($r in $rootDirs) {
+                if (-not $r) { continue }
+                foreach ($d in $OnlyUnder) {
+                    if ($d.StartsWith($r, [StringComparison]::OrdinalIgnoreCase)) { $relevant = $true; break }
+                }
+                if ($relevant) { break }
+            }
+            if (-not $relevant) { continue }
+        }
 
         $names = $null
         if (-not $NoCache -and $Cache.ContainsKey($t.hash)) {
@@ -361,7 +399,13 @@ Write-Host ""
 Write-Host "Re-verifying against a fresh torrent list before moving anything..."
 $freshCache = @{}          # deliberately cold: verification must not trust cached state
 $freshCalls = 0
-$fresh = Build-Expected -Session $session -Cache $freshCache -ApiCalls ([ref]$freshCalls)
+# Only the directories that actually hold a candidate. See Build-Expected.
+$orphanDirs = @($orphans | ForEach-Object { Get-ParentDir $_.Path } | Sort-Object -Unique)
+$swVerify = [Diagnostics.Stopwatch]::StartNew()
+$fresh = Build-Expected -Session $session -Cache $freshCache -ApiCalls ([ref]$freshCalls) -OnlyUnder $orphanDirs
+$swVerify.Stop()
+Write-Host ("Re-fetched {0} of {1} torrents: only those that could claim a file in the {2} folder(s) holding candidates ({3:N1}s)" -f `
+    $freshCalls, $fresh.Torrents.Count, $orphanDirs.Count, $swVerify.Elapsed.TotalSeconds)
 
 $dest = Join-Path $Quarantine (Get-Date -Format 'yyyy-MM-dd')
 $moved = 0; $movedBytes = 0; $skipped = 0

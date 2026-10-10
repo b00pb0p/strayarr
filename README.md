@@ -80,7 +80,11 @@ wrong about, so:
   their structure preserved, so restoring is a move back.
 - **You delete the quarantine folder yourself**, later, once nothing has broken.
 - **Orphans are re-verified against a fresh API query immediately before moving**,
-  so a torrent added while you were reading the report is not affected.
+  so a torrent added while you were reading the report is not affected. That
+  check ignores the cache, and re-fetches only the torrents that save into a
+  folder holding a candidate: a torrent can only claim files beneath its own
+  save directory, so the rest cannot change the answer. Quarantining three
+  files from one folder no longer waits on every torrent you have.
 - **Hard-linked files are skipped by default**, and so are files whose link
   count cannot be determined. More than one link means the file is also in your
   library; an unknown answer must block the move, not permit it.
